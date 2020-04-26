@@ -80,17 +80,14 @@ impl Connection {
         E: Sized + Encode<BytesMut>,
     {
         self.flushed = false;
-
         let packet_size = self.context.packet_size.load(Ordering::SeqCst) as usize - HEADER_BYTES;
 
-        let mut payload = BytesMut::with_capacity(packet_size + HEADER_BYTES);
+        let mut payload = BytesMut::new();
         item.encode(&mut payload)?;
 
         while !payload.is_empty() {
             let writable = cmp::min(payload.len(), packet_size);
-
-            let split_payload = BytesMut::from(&payload[..writable]);
-            payload = BytesMut::from(&payload[writable..]);
+            let split_payload = payload.split_to(writable);
 
             if payload.is_empty() {
                 header.set_status(PacketStatus::EndOfMessage);
@@ -119,8 +116,8 @@ impl Connection {
     /// makes sure we don't have any old data causing undefined behaviour after
     /// previous queries.
     ///
-    /// Calling this will slow down the queries if stream is still dirty, so
-    /// using all the results after querying must be handled properly.
+    /// Calling this will slow down the queries if stream is still dirty if all
+    /// results are not handled.
     pub(crate) async fn flush_stream(&mut self) -> crate::Result<()> {
         self.buf.truncate(0);
 
@@ -373,13 +370,12 @@ impl AsyncRead for Connection {
         cx: &mut task::Context<'_>,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        let this = self.get_mut();
+        let mut this = self.get_mut();
         let size = buf.len();
 
         if this.buf.len() < size {
-            match ready!(Pin::new(&mut this.transport).try_poll_next(cx)) {
+            match ready!(Pin::new(&mut this).try_poll_next(cx)) {
                 Some(Ok(packet)) => {
-                    this.flushed = packet.is_last();
                     let (_, payload) = packet.into_parts();
                     this.buf.extend(payload);
 
