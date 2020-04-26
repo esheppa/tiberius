@@ -11,16 +11,16 @@ mod collation;
 mod error;
 mod macros;
 mod protocol;
+mod result;
 mod row;
 mod tls;
 
 pub use client::{AuthMethod, Client, ClientBuilder};
 pub use error::Error;
-pub use protocol::{
-    stream::{ExecuteResult, QueryResult},
-    EncryptionLevel,
-};
+pub use protocol::EncryptionLevel;
+pub use result::*;
 pub use row::{Column, Row};
+pub use uuid::Uuid;
 
 pub type Result<T> = std::result::Result<T, Error>;
 

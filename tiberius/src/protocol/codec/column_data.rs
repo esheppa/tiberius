@@ -1,4 +1,4 @@
-use super::{Encode, FixedLenType, TypeInfo, VarLenType};
+use super::{read_varchar, Encode, FixedLenType, TypeInfo, VarLenType};
 use crate::{
     async_read_le_ext::AsyncReadLeExt,
     protocol::{self, types::Numeric},
@@ -7,9 +7,10 @@ use crate::{
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{BufMut, BytesMut};
 use encoding::DecoderTrap;
-use protocol::types::{Collation, Guid};
+use protocol::types::Collation;
 use std::borrow::Cow;
 use tokio::io::AsyncReadExt;
+use uuid::Uuid;
 
 #[derive(Clone, Debug)]
 pub enum ColumnData<'a> {
@@ -22,10 +23,10 @@ pub enum ColumnData<'a> {
     F64(f64),
     Bit(bool),
     String(Cow<'a, str>),
-    Guid(Cow<'a, Guid>),
+    Guid(Uuid),
     Binary(Cow<'a, [u8]>),
     Numeric(Numeric),
-    /* Guid(Cow<'a, Guid>),
+    /*
     DateTime(time::DateTime),
     SmallDateTime(time::SmallDateTime),
     Time(time::Time),
@@ -270,22 +271,9 @@ impl<'a> ColumnData<'a> {
                  */
                 todo!()
             }
-            VarLenType::BigBinary => Self::decode_binary(src, len).await?,
-            VarLenType::Text => {
-                let ptr_len = src.read_u8().await? as usize;
-                let _ = src.read_exact(&mut vec![0; ptr_len][0..ptr_len]).await?; // text ptr
-
-                src.read_i32_le().await?; // days
-                src.read_u32_le().await?; // second fractions
-
-                let text_len = src.read_u32_le().await? as usize;
-                let mut buf = vec![0; text_len];
-
-                src.read_exact(&mut buf[0..text_len]).await?;
-                let text = String::from_utf8(buf)?;
-
-                ColumnData::String(text.into())
-            }
+            VarLenType::BigBinary | VarLenType::BigVarBin => Self::decode_binary(src, len).await?,
+            VarLenType::Text => Self::decode_text(src).await?,
+            VarLenType::NText => Self::decode_ntext(src).await?,
             t => unimplemented!("{:?}", t),
         };
 
@@ -338,6 +326,12 @@ impl<'a> Encode<BytesMut> for ColumnData<'a> {
                 dst.extend_from_slice(&header);
                 dst.put_f64_le(val);
             }
+            ColumnData::Guid(uuid) => {
+                let header = [&[VarLenType::Guid as u8, 16, 16][..]].concat();
+
+                dst.extend_from_slice(&header);
+                dst.extend_from_slice(uuid.as_bytes());
+            }
             ColumnData::String(ref s) if s.len() <= 4000 => {
                 dst.put_u8(VarLenType::NVarchar as u8);
                 dst.put_u16_le(8000);
@@ -370,11 +364,29 @@ impl<'a> Encode<BytesMut> for ColumnData<'a> {
                 // PLP_TERMINATOR
                 dst.put_u32_le(0);
             }
-            // TODO
-            ColumnData::None => {}
-            ColumnData::Guid(_) => {}
-            ColumnData::Binary(_) => {}
-            ColumnData::Numeric(_) => {}
+            ColumnData::None => {
+                dst.put_u8(FixedLenType::Null as u8);
+            }
+            ColumnData::Binary(bytes) if bytes.len() <= 8000 => {
+                dst.put_u8(VarLenType::BigVarBin as u8);
+                dst.put_u16_le(8000);
+                dst.put_u16_le(bytes.len() as u16);
+                dst.extend(bytes.into_owned());
+            }
+            ColumnData::Binary(bytes) => {
+                dst.put_u8(VarLenType::BigVarBin as u8);
+                // Max length
+                dst.put_u16_le(0xffff as u16);
+                // Also the length is unknown
+                dst.put_u64_le(0xfffffffffffffffe as u64);
+                // We'll write in one chunk, length is the whole bytes length
+                dst.put_u32_le(bytes.len() as u32);
+                // Payload
+                dst.extend(bytes.into_owned());
+                // PLP_TERMINATOR
+                dst.put_u32_le(0);
+            }
+            ColumnData::Numeric(_) => todo!(),
         }
 
         Ok(())
@@ -454,7 +466,7 @@ impl<'a> ColumnData<'a> {
                     data[i] = src.read_u8().await?;
                 }
 
-                ColumnData::Guid(Cow::Owned(Guid(data)))
+                ColumnData::Guid(Uuid::from_slice(&data)?)
             }
             _ => {
                 return Err(Error::Protocol(
@@ -464,6 +476,51 @@ impl<'a> ColumnData<'a> {
         };
 
         Ok(res)
+    }
+
+    async fn decode_text<R>(src: &mut R) -> crate::Result<ColumnData<'static>>
+    where
+        R: AsyncReadLeExt + Unpin,
+    {
+        let ptr_len = src.read_u8().await? as usize;
+
+        if ptr_len == 0 {
+            Ok(ColumnData::None)
+        } else {
+            let _ = src.read_exact(&mut vec![0; ptr_len][0..ptr_len]).await?; // text ptr
+
+            src.read_i32_le().await?; // days
+            src.read_u32_le().await?; // second fractions
+
+            let text_len = src.read_u32_le().await? as usize;
+            let mut buf = vec![0; text_len];
+
+            src.read_exact(&mut buf[0..text_len]).await?;
+            let text = String::from_utf8(buf)?;
+
+            Ok(ColumnData::String(text.into()))
+        }
+    }
+
+    async fn decode_ntext<R>(src: &mut R) -> crate::Result<ColumnData<'static>>
+    where
+        R: AsyncReadLeExt + Unpin,
+    {
+        let ptr_len = src.read_u8().await? as usize;
+
+        if ptr_len == 0 {
+            Ok(ColumnData::None)
+        } else {
+            let _ = src.read_exact(&mut vec![0; ptr_len][0..ptr_len]).await?; // text ptr
+
+            src.read_i32_le().await?; // days
+            src.read_u32_le().await?; // second fractions
+
+            let text_len = src.read_u32_le().await? as usize / 2;
+            let text = read_varchar(src, text_len).await?;
+
+            Ok(ColumnData::String(text.into()))
+        }
     }
 
     async fn decode_variable_string<R>(

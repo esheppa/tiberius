@@ -13,6 +13,7 @@ use crate::{
 use bytes::BytesMut;
 use codec::PacketCodec;
 use futures::{ready, SinkExt, Stream, TryStream, TryStreamExt};
+use pretty_hex::*;
 use std::{
     cmp, io,
     pin::Pin,
@@ -407,4 +408,8 @@ impl AsyncRead for Connection {
     }
 }
 
-impl AsyncReadLeExt for Connection {}
+impl AsyncReadLeExt for Connection {
+    fn debug_buffer(&self) {
+        dbg!(self.buf.as_ref().hex_dump());
+    }
+}

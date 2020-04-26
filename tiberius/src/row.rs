@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use crate::error::Error;
 use protocol::codec::TokenRow;
+use uuid::Uuid;
 
 macro_rules! from_column_data {
     ($( $ty:ty: $($pat:pat => $val:expr),* );* ) => {
@@ -29,6 +30,24 @@ impl<'a> TryFrom<&'a ColumnData<'a>> for String {
     fn try_from(data: &ColumnData) -> crate::Result<Self> {
         match data {
             ColumnData::String(s) => Ok(s.to_string()),
+            _ => Err(Error::Conversion(
+                format!(
+                    "cannot interpret {:?} as an {} value",
+                    data,
+                    stringify!($ty)
+                )
+                .into(),
+            )),
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a ColumnData<'a>> for Vec<u8> {
+    type Error = Error;
+
+    fn try_from(data: &ColumnData) -> crate::Result<Self> {
+        match data {
+            ColumnData::Binary(s) => Ok(s.to_vec()),
             _ => Err(Error::Conversion(
                 format!(
                     "cannot interpret {:?} as an {} value",
@@ -123,7 +142,8 @@ from_column_data!(
     i32:        ColumnData::I32(val) => val;
     i64:        ColumnData::I64(val) => val;
     f32:        ColumnData::F32(val) => val;
-    f64:        ColumnData::F64(val) => val
+    f64:        ColumnData::F64(val) => val;
+    Uuid:       ColumnData::Guid(val) => val
                 // ColumnData::Numeric(val) => val.into();
     // TODO &'a str:    ColumnData::BString(ref buf) => buf.as_str(),
     //             ColumnData::String(ref buf) => buf;
