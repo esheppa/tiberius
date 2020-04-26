@@ -12,6 +12,8 @@ async fn connect() -> Result<Client> {
 
     let mut builder = Client::builder();
 
+    builder.trust_cert(); // temporary for azure testing
+
     if let Ok(host) = env::var("TIBERIUS_TEST_HOST") {
         builder.host(host);
     };

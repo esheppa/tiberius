@@ -36,12 +36,28 @@ optional = true
 version = "0.2.1"
 
 [dependencies.tokio]
-features = ["sync", "io-std", "stream", "time", "io-util", "tcp", "udp"]
+features = ["sync", "io-std", "stream", "time", "io-util", "tcp", "udp", "dns", "net"]
 version = "0.2"
 
 [dependencies.tokio-tls]
 optional = true
 version = "0.3"
+
+[dependencies.tokio-rustls]
+optional = true
+version = "0.13"
+
+[dependencies.rustls]
+optional = true
+version = "0.17"
+
+[dependencies.webpki]
+optional = true
+version = "0.21"
+
+[dependencies.webpki-roots]
+optional = true
+version = "0.18"
 
 [dependencies.tracing]
 features = ["log"]
@@ -52,6 +68,7 @@ version = "0.0.4"
 
 [dev-dependencies]
 env_logger = "0.7"
+tracing-subscriber = "0.2" # temporary for testing azure db
 
 [dev-dependencies.tokio]
 features = ["macros"]
@@ -61,5 +78,7 @@ version = "0.2"
 version = "1"
 
 [features]
-default = ["tls"]
+default = []
+notls = []
 tls = ["native-tls", "tokio-tls"]
+rust-tls = ["rustls", "tokio-rustls", "webpki", "webpki-roots"]

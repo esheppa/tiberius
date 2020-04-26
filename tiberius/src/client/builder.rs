@@ -5,9 +5,9 @@ use crate::{
     Client, EncryptionLevel, Error,
 };
 use ::std::str;
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration, net::SocketAddr};
 use tokio::{
-    net::{TcpStream, UdpSocket},
+    net::{TcpStream, UdpSocket, self, ToSocketAddrs},
     time,
 };
 use tokio_util::codec::Framed;
@@ -67,6 +67,7 @@ impl ClientBuilder {
     }
 
     pub async fn build(self) -> crate::Result<Client> {
+        debug!("Building: {:#?}", &self);
         let context = Arc::new(Context::new());
 
         let host = self
@@ -75,19 +76,52 @@ impl ClientBuilder {
             .map(|s| s.as_str())
             .unwrap_or("127.0.0.1");
 
+//          let addr = (parts[0], 1434).to_socket_addrs()?.nth(0).ok_or(Error::Conversion(
+//                        "connection string: could not resolve server address".into(),
+//                    ))?;
+
         let port = self.port.unwrap_or(1433);
-        let mut addr = format!("{}:{}", host, port).parse().unwrap();
+        //dbg!(&host);
+        //dbg!(&host[4..]);
+        let mut addr = net::lookup_host((host, port)).await?.next().ok_or_else(|| Error::Conversion(format!("connection string: could not resolve server address for host: {} and port: {}",host,port).into()))?;
+       // let mut addr = format!("{}:{}", host, port).parse().unwrap();
 
         if let Some(ref instance_name) = self.instance_name {
             addr = find_tcp_sql_browser_addr(addr, instance_name).await?;
         };
 
+        use tracing::debug;
+
+        debug!("attempting to login using addr {:?}", addr);
+
         let mut connection = connect_tcp(addr, context.clone()).await?;
+
+        debug!("connected");
+
         let prelogin = connection.prelogin(self.ssl).await?;
+
+        debug!("prelogin {:?}", prelogin);
+        debug!("self.ssl {:?}", self.ssl);
+
         let ssl = prelogin.negotiated_encryption(self.ssl);
 
+        debug!("ssl {:?}", ssl);
+
+        dbg!(&addr);
+        dbg!("Need to provide empty string as domain if the host is an ip address, else need to provide the full domain");
+
+
+        #[cfg(not(feature ="notls"))]
+        let mut connection = connection.tls_handshake(ssl, self.trust_cert, host).await?;
+
+        #[cfg(feature ="notls")]
         let mut connection = connection.tls_handshake(ssl, self.trust_cert).await?;
+
+        debug!("completed tls handshake");
+
         connection.login(self.auth, self.database).await?;
+
+        debug!("successfully logged in");
 
         Ok(Client {
             connection,

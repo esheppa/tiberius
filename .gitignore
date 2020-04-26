@@ -1,6 +1,12 @@
 target
 Cargo.lock
 .idea
+
+# temp
 .cargo-registry
 mssql.sh
 test.sh
+azure-test
+azure-test.sh
+azure-test.rs
+Session.vim

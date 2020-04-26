@@ -7,6 +7,7 @@ use crate::{
         Context, HEADER_BYTES,
     },
     tls::MaybeTlsStream,
+    tls::TlsTdsWrapper,
     EncryptionLevel,
 };
 use bytes::BytesMut;
@@ -54,6 +55,17 @@ impl Connection {
             buf: BytesMut::new(),
         }
     }
+
+    pub(crate) fn get_packet_size(&self) -> usize {
+        self.context.packet_size.load(Ordering::SeqCst) as usize - HEADER_BYTES
+    }
+    pub(crate) fn get_prelogin_packet_header(&self, ssl: EncryptionLevel) -> PacketHeader {
+        let mut msg = PreloginMessage::new();
+        msg.encryption = ssl;
+        PacketHeader::pre_login(&self.context)
+    }
+
+
 
     /// Send an item to the wire. Header should define the item type and item should implement
     /// [`Encode`], defining the byte structure for the wire.
@@ -223,10 +235,12 @@ impl Connection {
         self,
         ssl: EncryptionLevel,
         trust_cert: bool,
+        domain: &str,
     ) -> crate::Result<Self> {
         if ssl != EncryptionLevel::NotSupported {
             let mut builder = native_tls::TlsConnector::builder();
 
+            use tracing::debug;
             if trust_cert {
                 builder.danger_accept_invalid_certs(true);
                 builder.danger_accept_invalid_hostnames(true);
@@ -236,12 +250,21 @@ impl Connection {
             let cx = builder.build().unwrap();
             let connector = tokio_tls::TlsConnector::from(cx);
 
+            debug!("made connector");
             let stream = match self.transport.into_inner() {
-                MaybeTlsStream::Raw(tcp) => connector.connect("", tcp).await?,
+                MaybeTlsStream::Raw(tcp) => { 
+                    let wrapped = TlsTdsWrapper::new(tcp);
+                    let s = connector.connect(domain, wrapped).await;
+                    dbg!(&s);
+                    s.unwrap()
+                },
+                // MaybeTlsStream::Raw(tcp) => connector.connect(domain, tcp).await?,
                 _ => unreachable!(),
             };
+            debug!("made stream");
 
             let transport = Framed::new(MaybeTlsStream::Tls(stream), PacketCodec);
+            debug!("made transport");
 
             Ok(Self {
                 transport,
@@ -255,7 +278,61 @@ impl Connection {
     }
 
     /// Implements the TLS handshake with the SQL Server.
-    #[cfg(not(feature = "tls"))]
+    #[cfg(feature = "rust-tls")]
+    pub(crate) async fn tls_handshake(
+        self,
+        ssl: EncryptionLevel,
+        trust_cert: bool,
+        domain: &str,
+    ) -> crate::Result<Self> {
+        if ssl != EncryptionLevel::NotSupported {
+
+            let mut config = rustls::ClientConfig::new();
+            config.versions = vec!(rustls::ProtocolVersion::TLSv1_2);
+            config.ciphersuites = vec!(&rustls::ALL_CIPHERSUITES[7]);
+            config.root_store.add_server_trust_anchors(&webpki_roots::TLS_SERVER_ROOTS);
+            let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
+
+            use tracing::debug;
+
+
+
+
+            let dns_ref = webpki::DNSNameRef::try_from_ascii_str(&domain).expect("Invalid DNS name");
+            let ps = self.get_packet_size();
+            let ph = self.get_prelogin_packet_header(ssl);
+
+            debug!("made connector");
+            let stream = match self.transport.into_inner() {
+                MaybeTlsStream::Raw(tcp) => { 
+                    dbg!(&tcp);
+                    let wrapped = TlsTdsWrapper::new(ps, ph, tcp);
+                    let s = connector.connect(dns_ref, wrapped).await;
+                    dbg!(&s);
+                    s.unwrap()
+                },
+                // MaybeTlsStream::Raw(tcp) => connector.connect(domain, tcp).await?,
+                _ => unreachable!(),
+            };
+            debug!("made stream");
+
+            let transport = Framed::new(MaybeTlsStream::RustTls(stream), PacketCodec);
+            debug!("made transport");
+
+            Ok(Self {
+                transport,
+                context: self.context,
+                flushed: false,
+                buf: BytesMut::new(),
+            })
+        } else {
+            Ok(self)
+        }
+    }
+
+
+    /// Implements the TLS handshake with the SQL Server.
+    #[cfg(feature = "notls")]
     pub(crate) async fn tls_handshake(self, ssl: EncryptionLevel, _: bool) -> crate::Result<Self> {
         assert_eq!(ssl, EncryptionLevel::NotSupported);
         Ok(self)

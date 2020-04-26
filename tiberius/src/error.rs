@@ -39,10 +39,21 @@ pub enum Error {
     #[cfg(feature = "tls")]
     #[error("Error forming TLS connection {}", _0)]
     Tls(String),
+    #[cfg(feature = "rust-tls")]
+    #[error("Error forming TLS connection {}", _0)]
+    Tls(String),
 }
 
+#[cfg(feature = "tls")]
 impl From<native_tls::Error> for Error {
     fn from(v: native_tls::Error) -> Self {
+        Error::Tls(format!("{}", v))
+    }
+}
+
+#[cfg(feature = "rust-tls")]
+impl From<rustls::TLSError> for Error {
+    fn from(v: rustls::TLSError) -> Self {
         Error::Tls(format!("{}", v))
     }
 }
