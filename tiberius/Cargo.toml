@@ -86,7 +86,7 @@ version = "0.2"
 version = "1"
 
 [features]
-default = ["tls", "chrono", "tds73"]
+default = ["chrono", "tds73"]
 notls = []
 tls = ["native-tls", "tokio-tls"]
 rust-tls = ["rustls", "tokio-rustls", "webpki", "webpki-roots"]

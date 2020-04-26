@@ -36,10 +36,7 @@ pub enum Error {
     Server(TokenError),
     #[error("Operation cancelled")]
     Canceled,
-    #[cfg(feature = "tls")]
-    #[error("Error forming TLS connection {}", _0)]
-    Tls(String),
-    #[cfg(feature = "rust-tls")]
+    #[cfg(not(feature = "notls"))]
     #[error("Error forming TLS connection {}", _0)]
     Tls(String),
 }

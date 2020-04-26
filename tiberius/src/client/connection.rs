@@ -247,11 +247,13 @@ impl Connection {
 
             let cx = builder.build().unwrap();
             let connector = tokio_tls::TlsConnector::from(cx);
+            let ps = self.get_packet_size();
+            let ph = self.get_prelogin_packet_header(ssl);
 
             debug!("made connector");
             let stream = match self.transport.into_inner() {
                 MaybeTlsStream::Raw(tcp) => { 
-                    let wrapped = TlsTdsWrapper::new(tcp);
+                    let wrapped = TlsTdsWrapper::new(ps, ph, tcp);
                     let s = connector.connect(domain, wrapped).await;
                     dbg!(&s);
                     s.unwrap()
