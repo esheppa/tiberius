@@ -2,62 +2,72 @@ use futures_util::{StreamExt, TryStreamExt};
 use once_cell::sync::Lazy;
 use std::env;
 use std::sync::Once;
-use tiberius::{numeric::Numeric, xml::XmlData, Client, ClientBuilder, Result};
+//use tiberius::{Client, ClientBuilder, Result};
 use uuid::Uuid;
+
+use tiberius::{ClientBuilder, Result, Client, GenericTcpStream};
+
+use std::{io, net::{self, ToSocketAddrs}};
+use async_trait::async_trait;
+
+use smol::Async;
+
+pub struct SmolTcpStreamWrapper();
+
+#[async_trait]
+impl GenericTcpStream<smol::Async<net::TcpStream>> for SmolTcpStreamWrapper {
+    async fn connect(&self, addr: String, instance_name: &Option<String>) -> tiberius::Result<smol::Async<net::TcpStream>> 
+    {
+        let mut addr = addr.to_socket_addrs()?.next().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "Could not resolve server host.")
+        })?;
+
+        if let Some(ref instance_name) = instance_name {
+            addr = tiberius::find_tcp_port(addr, instance_name).await?;
+        };
+        Ok(smol::Async::<net::TcpStream>::connect(addr).await?)
+    }
+}
 
 static LOGGER_SETUP: Once = Once::new();
 
 static CONN_STR: Lazy<String> = Lazy::new(|| {
-    env::var("TIBERIUS_TEST_CONNECTION_STRING").unwrap_or(
-        "server=tcp:localhost,1433;integratedSecurity=true;TrustServerCertificate=true".to_owned(),
-    )
+    env::var("TIBERIUS_TEST_CONNECTION_STRING")
+        .unwrap_or("server=tcp:localhost,1433;TrustServerCertificate=true".to_owned())
 });
 
-async fn connect() -> Result<Client> {
+async fn connect() -> Result<Client<smol::Async<net::TcpStream>>> {
     LOGGER_SETUP.call_once(|| {
         env_logger::init();
     });
 
     let builder = ClientBuilder::from_ado_string(&*CONN_STR)?;
-    builder.build().await
+    builder.build(SmolTcpStreamWrapper()).await
 }
 
 #[cfg(feature = "tls")]
-#[tokio::test]
-async fn connect_with_full_encryption() -> Result<()> {
-    LOGGER_SETUP.call_once(|| {
-        env_logger::init();
-    });
+fn test_conn_full_encryption() -> Result<()> {
+    smol::run( async {
+        LOGGER_SETUP.call_once(|| {
+            env_logger::init();
+        });
 
-    let conn_str = format!("{};encrypt=true", *CONN_STR);
-    let mut conn = ClientBuilder::from_ado_string(&conn_str)?.build().await?;
+        let conn_str = format!("{};encrypt=true", *CONN_STR);
+        let mut conn: Client<smol::Async<net::TcpStream>> = ClientBuilder::from_ado_string(&conn_str)?.build(SmolTcpStreamWrapper()).await?;
 
-    let stream = conn.query("SELECT @P1", &[&-4i32]).await?;
+        let stream = conn.query("SELECT @P1", &[&-4i32]).await?;
 
-    let rows: Result<Vec<i32>> = stream.map_ok(|x| x.get::<_, i32>(0)).try_collect().await;
-    assert_eq!(rows?, vec![-4i32]);
+        let rows: Result<Vec<i32>> = stream.map_ok(|x| x.get::<_, i32>(0)).try_collect().await;
+        assert_eq!(rows?, vec![-4i32]);
 
-    Ok(())
+        Ok(())
+    })
 }
 
-#[cfg(windows)]
-#[tokio::test]
-async fn connect_to_named_instance() -> Result<()> {
-    let instance_name = env::var("TIBERIUS_TEST_INSTANCE").unwrap_or("MSSQLSERVER".to_owned());
 
-    let conn_str = CONN_STR.replace(",1433", &format!("\\{}", instance_name));
-    let mut conn = ClientBuilder::from_ado_string(&conn_str)?.build().await?;
-
-    let stream = conn.query("SELECT @P1", &[&-4i32]).await?;
-
-    let rows: Result<Vec<i32>> = stream.map_ok(|x| x.get::<_, i32>(0)).try_collect().await;
-    assert_eq!(rows?, vec![-4i32]);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn read_and_write_kanji_varchars() -> Result<()> {
+#[test]
+fn test_kanji_varchars() -> Result<()> {
+    smol::run( async {
     let mut conn = connect().await?;
 
     conn.execute("CREATE TABLE ##TestKanji (content NVARCHAR(max))", &[])
@@ -73,7 +83,7 @@ async fn read_and_write_kanji_varchars() -> Result<()> {
         )
         .await?;
 
-    assert_eq!(2, res.total());
+    assert_eq!(2, res.total().await?);
 
     let stream = conn.query("SELECT content FROM ##TestKanji", &[]).await?;
 
@@ -85,10 +95,13 @@ async fn read_and_write_kanji_varchars() -> Result<()> {
     assert_eq!(vec![kanji, long_kanji], results);
 
     Ok(())
+    })
 }
 
-#[tokio::test]
-async fn read_and_write_finnish_varchars() -> Result<()> {
+
+#[test]
+fn test_finnish_varchars() -> Result<()> {
+    smol::run( async {
     let mut conn = connect().await?;
 
     conn.execute("CREATE TABLE ##TestFinnish (content NVARCHAR(max))", &[])
@@ -103,7 +116,7 @@ async fn read_and_write_finnish_varchars() -> Result<()> {
         )
         .await?;
 
-    assert_eq!(1, res.total());
+    assert_eq!(1, res.total().await?);
 
     let stream = conn.query("SELECT content FROM ##TestFinnish", &[]).await?;
 
@@ -115,10 +128,13 @@ async fn read_and_write_finnish_varchars() -> Result<()> {
     assert_eq!(vec![kalevala], results);
 
     Ok(())
+    })
 }
 
-#[tokio::test]
-async fn execute_insert_update_delete() -> Result<()> {
+
+#[test]
+fn test_execute() -> Result<()> {
+    smol::run( async {
     let mut conn = connect().await?;
 
     conn.execute("CREATE TABLE ##TestExecute (id int)", &[])
@@ -130,7 +146,8 @@ async fn execute_insert_update_delete() -> Result<()> {
             &[&1i32, &2i32, &3i32],
         )
         .await?
-        .total();
+        .total()
+        .await?;
 
     assert_eq!(3, insert_count);
 
@@ -140,22 +157,27 @@ async fn execute_insert_update_delete() -> Result<()> {
             &[&2i32, &1i32],
         )
         .await?
-        .total();
+        .total()
+        .await?;
 
     assert_eq!(1, update_count);
 
     let delete_count = conn
         .execute("DELETE ##TestExecute WHERE id <> @P1", &[&3i32])
         .await?
-        .total();
+        .total()
+        .await?;
 
     assert_eq!(2, delete_count);
 
     Ok(())
+    })
 }
 
-#[tokio::test]
-async fn execute_with_multiple_separate_results() -> Result<()> {
+
+#[test]
+fn test_execute_multiple_separate_results() -> Result<()> {
+    smol::run( async {
     let mut conn = connect().await?;
 
     conn.execute("CREATE TABLE ##TestExecuteMultiple1 (id int)", &[])
@@ -168,14 +190,17 @@ async fn execute_with_multiple_separate_results() -> Result<()> {
         )
         .await?;
 
-    let result: Vec<_> = insert_count.into_iter().collect();
+    let result: Vec<_> = insert_count.try_collect().await?;
     assert_eq!(vec![1, 2], result);
 
     Ok(())
+    })
 }
 
-#[tokio::test]
-async fn execute_multiple_count_total() -> Result<()> {
+
+#[test]
+fn test_execute_multiple_total() -> Result<()> {
+    smol::run( async {
     let mut conn = connect().await?;
 
     conn.execute("CREATE TABLE ##TestExecuteMultiple2 (id int)", &[])
@@ -188,14 +213,17 @@ async fn execute_multiple_count_total() -> Result<()> {
         )
         .await?;
 
-    let result = insert_count.total();
+    let result = insert_count.total().await?;
     assert_eq!(3, result);
 
     Ok(())
+    })
 }
 
-#[tokio::test]
-async fn correct_row_handling_when_not_enough_data() -> Result<()> {
+
+#[test]
+fn test_correct_row_handling_when_not_enough_data() -> Result<()> {
+    smol::run( async {
     let mut conn = connect().await?;
 
     let mut stream = conn
@@ -223,10 +251,13 @@ async fn correct_row_handling_when_not_enough_data() -> Result<()> {
     assert_eq!(vec!["b".repeat(2095)], result);
 
     Ok(())
+    })
 }
 
-#[tokio::test]
-async fn multiple_stored_procedure_functions() -> Result<()> {
+
+#[test]
+fn test_stored_procedure_multiple_sp() -> Result<()> {
+    smol::run( async {
     let mut conn = connect().await?;
     let mut stream = conn.query("EXECUTE sp_executesql N'SELECT 1 UNION ALL SELECT 1 UNION ALL SELECT 1'; EXECUTE sp_executesql N'SELECT 1 UNION ALL SELECT 1'", &[]).await?;
 
@@ -243,10 +274,13 @@ async fn multiple_stored_procedure_functions() -> Result<()> {
     assert_eq!(rows?, vec![1; 2]);
 
     Ok(())
+    })
 }
 
-#[tokio::test]
-async fn multiple_queries() -> Result<()> {
+
+#[test]
+fn test_stored_procedure_multiple() -> Result<()> {
+    smol::run( async {
     let mut conn = connect().await?;
 
     let mut stream = conn
@@ -277,16 +311,15 @@ async fn multiple_queries() -> Result<()> {
     assert_eq!(rows?, vec!["b".to_string()]);
 
     Ok(())
+    })
 }
 
-#[tokio::test]
-async fn bool_type() -> Result<()> {
+
+#[test]
+fn test_type_bool() -> Result<()> {
+    smol::run( async {
     let mut conn = connect().await?;
-
-    let mut stream = conn
-        .query("SELECT @P1, @P2 ORDER BY 1", &[&false, &false])
-        .await?;
-
+    let mut stream = conn.query("SELECT @P1, @P2", &[&false, &false]).await?;
     let mut rows: Vec<bool> = Vec::with_capacity(2);
 
     while let Some(row) = stream.next().await {
@@ -297,80 +330,104 @@ async fn bool_type() -> Result<()> {
 
     assert_eq!(rows, vec![false, false]);
     Ok(())
+    })
 }
 
-#[tokio::test]
-async fn i8_token() -> Result<()> {
+
+#[test]
+fn test_type_i8() -> Result<()> {
+    smol::run( async {
     let mut conn = connect().await?;
     let stream = conn.query("SELECT @P1", &[&-4i8]).await?;
 
     let rows: Result<Vec<i8>> = stream.map_ok(|x| x.get::<_, i8>(0)).try_collect().await;
     assert_eq!(rows?, vec![-4i8]);
     Ok(())
+    })
 }
 
-#[tokio::test]
-async fn i16_token() -> Result<()> {
+
+#[test]
+fn test_type_i16() -> Result<()> {
+    smol::run( async {
     let mut conn = connect().await?;
     let stream = conn.query("SELECT @P1", &[&-4i16]).await?;
 
     let rows: Result<Vec<i16>> = stream.map_ok(|x| x.get::<_, i16>(0)).try_collect().await;
     assert_eq!(rows?, vec![-4i16]);
     Ok(())
+    })
 }
 
-#[tokio::test]
-async fn i32_token() -> Result<()> {
+
+#[test]
+fn test_type_i32() -> Result<()> {
+    smol::run( async {
     let mut conn = connect().await?;
     let stream = conn.query("SELECT @P1", &[&-4i32]).await?;
 
     let rows: Result<Vec<i32>> = stream.map_ok(|x| x.get::<_, i32>(0)).try_collect().await;
     assert_eq!(rows?, vec![-4i32]);
     Ok(())
+    })
 }
 
-#[tokio::test]
-async fn i64_token() -> Result<()> {
+
+#[test]
+fn test_type_i64() -> Result<()> {
+    smol::run( async {
     let mut conn = connect().await?;
     let stream = conn.query("SELECT @P1", &[&-4i64]).await?;
 
     let rows: Result<Vec<i64>> = stream.map_ok(|x| x.get::<_, i64>(0)).try_collect().await;
     assert_eq!(rows?, vec![-4i64]);
     Ok(())
+    })
 }
 
-#[tokio::test]
-async fn f32_token() -> Result<()> {
+
+#[test]
+fn test_type_f32() -> Result<()> {
+    smol::run( async {
     let mut conn = connect().await?;
     let stream = conn.query("SELECT @P1", &[&4.20f32]).await?;
 
     let rows: Result<Vec<f32>> = stream.map_ok(|x| x.get::<_, f32>(0)).try_collect().await;
     assert_eq!(rows?, vec![4.20f32]);
     Ok(())
+    })
 }
 
-#[tokio::test]
-async fn f64_token() -> Result<()> {
+
+#[test]
+fn test_type_f64() -> Result<()> {
+    smol::run( async {
     let mut conn = connect().await?;
     let stream = conn.query("SELECT @P1", &[&4.20f64]).await?;
 
     let rows: Result<Vec<f64>> = stream.map_ok(|x| x.get::<_, f64>(0)).try_collect().await;
     assert_eq!(rows?, vec![4.20f64]);
     Ok(())
+    })
 }
 
-#[tokio::test]
-async fn short_strings() -> Result<()> {
+
+#[test]
+fn test_type_short_string() -> Result<()> {
+    smol::run( async {
     let mut conn = connect().await?;
     let stream = conn.query("SELECT @P1", &[&"Hallo"]).await?;
 
     let rows: Result<Vec<String>> = stream.map_ok(|x| x.get::<_, String>(0)).try_collect().await;
     assert_eq!(rows?, vec![String::from("Hallo")]);
     Ok(())
+    })
 }
 
-#[tokio::test]
-async fn long_strings() -> Result<()> {
+
+#[test]
+fn test_type_long_string() -> Result<()> {
+    smol::run( async {
     let mut conn = connect().await?;
     let string = "a".repeat(4001);
     let stream = conn.query("SELECT @P1", &[&string.as_str()]).await?;
@@ -378,10 +435,13 @@ async fn long_strings() -> Result<()> {
     let rows: Result<Vec<String>> = stream.map_ok(|x| x.get::<_, String>(0)).try_collect().await;
     assert_eq!(rows?, vec![string]);
     Ok(())
+    })
 }
 
-#[tokio::test]
-async fn stored_procedures() -> Result<()> {
+
+#[test]
+fn test_stored_procedure() -> Result<()> {
+    smol::run( async {
     let mut conn = connect().await?;
     let stream = conn
         .query(
@@ -392,10 +452,13 @@ async fn stored_procedures() -> Result<()> {
     let rows: Result<Vec<i32>> = stream.map_ok(|x| x.get::<_, i32>(0)).try_collect().await;
     assert_eq!(rows?, vec![1; 3]);
     Ok(())
+    })
 }
 
-#[tokio::test]
-async fn drop_stream_before_handling_all_results_should_not_cause_weird_things() -> Result<()> {
+
+#[test]
+fn test_drop_stream_before_handling_all_results() -> Result<()> {
+    smol::run( async {
     let mut conn = connect().await?;
 
     {
@@ -411,7 +474,7 @@ async fn drop_stream_before_handling_all_results_should_not_cause_weird_things()
             .try_collect()
             .await?;
 
-        assert_eq!(vec!["a".repeat(8000)], res);
+        assert_eq!("a".repeat(8000), res[0]);
     }
 
     {
@@ -421,10 +484,13 @@ async fn drop_stream_before_handling_all_results_should_not_cause_weird_things()
     }
 
     Ok(())
+    })
 }
 
-#[tokio::test]
-async fn nbc_rows() -> Result<()> {
+
+#[test]
+fn test_nbc_row() -> Result<()> {
+    smol::run( async {
     let mut conn = connect().await?;
 
     let mut stream = conn
@@ -461,10 +527,13 @@ async fn nbc_rows() -> Result<()> {
     assert_eq!(expected_results, res);
 
     Ok(())
+    })
 }
 
-#[tokio::test]
-async fn ntext_type() -> Result<()> {
+
+#[test]
+fn test_ntext() -> Result<()> {
+    smol::run( async {
     let mut conn = connect().await?;
 
     let string = r#"Hääpuhetta voi värittää kertomalla vitsejä, aforismeja,
@@ -488,10 +557,13 @@ async fn ntext_type() -> Result<()> {
     assert_eq!(rows, vec![string]);
 
     Ok(())
+    })
 }
 
-#[tokio::test]
-async fn ntext_empty() -> Result<()> {
+
+#[test]
+fn test_ntext_empty() -> Result<()> {
+    smol::run( async {
     let mut conn = connect().await?;
 
     conn.execute("CREATE TABLE ##TestNTextEmpty (content NTEXT)", &[])
@@ -517,10 +589,13 @@ async fn ntext_empty() -> Result<()> {
     assert_eq!(rows, vec![None]);
 
     Ok(())
+    })
 }
 
-#[tokio::test]
-async fn text_type() -> Result<()> {
+
+#[test]
+fn test_text() -> Result<()> {
+    smol::run( async {
     let mut conn = connect().await?;
 
     let string = "a".repeat(10000);
@@ -544,10 +619,13 @@ async fn text_type() -> Result<()> {
     assert_eq!(rows, vec![string]);
 
     Ok(())
+    })
 }
 
-#[tokio::test]
-async fn text_empty() -> Result<()> {
+
+#[test]
+fn test_text_empty() -> Result<()> {
+    smol::run( async {
     let mut conn = connect().await?;
 
     conn.execute("CREATE TABLE ##TestTextEmpty (content TEXT)", &[])
@@ -573,10 +651,13 @@ async fn text_empty() -> Result<()> {
     assert_eq!(rows, vec![None]);
 
     Ok(())
+    })
 }
 
-#[tokio::test]
-async fn varbinary_empty() -> Result<()> {
+
+#[test]
+fn test_varbinary_empty() -> Result<()> {
+    smol::run( async {
     let mut conn = connect().await?;
 
     conn.execute(
@@ -591,7 +672,8 @@ async fn varbinary_empty() -> Result<()> {
             &[&Option::<Vec<u8>>::None],
         )
         .await?
-        .total();
+        .total()
+        .await?;
 
     assert_eq!(1, total);
 
@@ -609,10 +691,13 @@ async fn varbinary_empty() -> Result<()> {
     assert_eq!(rows, vec![None]);
 
     Ok(())
+    })
 }
 
-#[tokio::test]
-async fn binary_type() -> Result<()> {
+
+#[test]
+fn test_binary() -> Result<()> {
+    smol::run( async {
     let mut conn = connect().await?;
 
     conn.execute("CREATE TABLE ##TestBinary (content BINARY(8000))", &[])
@@ -627,7 +712,8 @@ async fn binary_type() -> Result<()> {
             &[&binary.as_slice()],
         )
         .await?
-        .total();
+        .total()
+        .await?;
 
     assert_eq!(1, inserted);
 
@@ -643,10 +729,13 @@ async fn binary_type() -> Result<()> {
     assert_eq!(binary, rows[0]);
 
     Ok(())
+    })
 }
 
-#[tokio::test]
-async fn varbinary_type() -> Result<()> {
+
+#[test]
+fn test_var_binary() -> Result<()> {
+    smol::run( async {
     let mut conn = connect().await?;
 
     conn.execute("CREATE TABLE ##VarBinary (content VARBINARY(8000))", &[])
@@ -661,7 +750,8 @@ async fn varbinary_type() -> Result<()> {
             &[&binary.as_slice()],
         )
         .await?
-        .total();
+        .total()
+        .await?;
 
     assert_eq!(1, inserted);
 
@@ -677,44 +767,13 @@ async fn varbinary_type() -> Result<()> {
     assert_eq!(binary, rows[0]);
 
     Ok(())
+    })
 }
 
-#[tokio::test]
-async fn image_type() -> Result<()> {
-    let mut conn = connect().await?;
 
-    conn.execute("CREATE TABLE ##ImageType (content IMAGE)", &[])
-        .await?;
-
-    let mut binary = vec![0; 79];
-    binary.push(5);
-
-    let inserted = conn
-        .execute(
-            "INSERT INTO ##ImageType (content) VALUES (@P1)",
-            &[&binary.as_slice()],
-        )
-        .await?
-        .total();
-
-    assert_eq!(1, inserted);
-
-    let mut stream = conn.query("SELECT content FROM ##ImageType", &[]).await?;
-
-    let mut rows: Vec<Vec<u8>> = Vec::new();
-    while let Some(row) = stream.try_next().await? {
-        let s: Vec<u8> = row.get::<_, Vec<u8>>(0);
-        rows.push(s);
-    }
-
-    assert_eq!(80, rows[0].len());
-    assert_eq!(binary, rows[0]);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn guid_type() -> Result<()> {
+#[test]
+fn test_guid() -> Result<()> {
+    smol::run( async {
     let mut conn = connect().await?;
 
     let id = Uuid::new_v4();
@@ -725,10 +784,13 @@ async fn guid_type() -> Result<()> {
     assert_eq!(id, rows[0]);
 
     Ok(())
+    })
 }
 
-#[tokio::test]
-async fn varbinary_max() -> Result<()> {
+
+#[test]
+fn test_max_binary() -> Result<()> {
+    smol::run( async {
     let mut conn = connect().await?;
 
     conn.execute("CREATE TABLE ##MaxBinary (content VARBINARY(max))", &[])
@@ -743,7 +805,8 @@ async fn varbinary_max() -> Result<()> {
             &[&binary.as_slice()],
         )
         .await?
-        .total();
+        .total()
+        .await?;
 
     assert_eq!(1, inserted);
 
@@ -759,151 +822,14 @@ async fn varbinary_max() -> Result<()> {
     assert_eq!(binary, rows[0]);
 
     Ok(())
+    })
 }
 
-#[tokio::test]
-async fn numeric_type_u32_presentation() -> Result<()> {
-    let mut conn = connect().await?;
-    let num = Numeric::new_with_scale(2, 1);
-    let stream = conn.query("SELECT @P1", &[&num]).await?;
 
-    let rows: Vec<_> = stream
-        .map_ok(|x| x.get::<_, Numeric>(0))
-        .try_collect()
-        .await?;
-
-    assert_eq!(num, rows[0]);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn numeric_type_u64_presentation() -> Result<()> {
-    let mut conn = connect().await?;
-    let num = Numeric::new_with_scale(i32::MAX as i128 + 10, 1);
-    let stream = conn.query("SELECT @P1", &[&num]).await?;
-
-    let rows: Vec<_> = stream
-        .map_ok(|x| x.get::<_, Numeric>(0))
-        .try_collect()
-        .await?;
-
-    assert_eq!(num, rows[0]);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn numeric_type_u96_presentation() -> Result<()> {
-    let mut conn = connect().await?;
-    let num = Numeric::new_with_scale(i64::MAX as i128, 19);
-    let stream = conn.query("SELECT @P1", &[&num]).await?;
-
-    let rows: Vec<_> = stream
-        .map_ok(|x| x.get::<_, Numeric>(0))
-        .try_collect()
-        .await?;
-
-    assert_eq!(num, rows[0]);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn numeric_type_u128_presentation() -> Result<()> {
-    let mut conn = connect().await?;
-    let num = Numeric::new_with_scale(i64::MAX as i128, 37);
-    let stream = conn.query("SELECT @P1", &[&num]).await?;
-
-    let rows: Vec<_> = stream
-        .map_ok(|x| x.get::<_, Numeric>(0))
-        .try_collect()
-        .await?;
-
-    assert_eq!(num, rows[0]);
-
-    Ok(())
-}
-
-#[tokio::test]
-#[cfg(feature = "rust_decimal")]
-async fn decimal_type_u32_presentation() -> Result<()> {
-    use rust_decimal::Decimal;
-
-    let mut conn = connect().await?;
-    let num = Decimal::from_i128_with_scale(2, 1);
-    let stream = conn.query("SELECT @P1", &[&num]).await?;
-
-    let rows: Vec<_> = stream
-        .map_ok(|x| x.get::<_, Decimal>(0))
-        .try_collect()
-        .await?;
-
-    assert_eq!(num, rows[0]);
-
-    Ok(())
-}
-
-#[tokio::test]
-#[cfg(feature = "rust_decimal")]
-async fn decimal_type_u64_presentation() -> Result<()> {
-    use rust_decimal::Decimal;
-
-    let mut conn = connect().await?;
-    let num = Decimal::from_i128_with_scale(i32::MAX as i128 + 10, 1);
-    let stream = conn.query("SELECT @P1", &[&num]).await?;
-
-    let rows: Vec<_> = stream
-        .map_ok(|x| x.get::<_, Decimal>(0))
-        .try_collect()
-        .await?;
-
-    assert_eq!(num, rows[0]);
-
-    Ok(())
-}
-
-#[tokio::test]
-#[cfg(feature = "rust_decimal")]
-async fn decimal_type_u96_presentation() -> Result<()> {
-    use rust_decimal::Decimal;
-
-    let mut conn = connect().await?;
-    let num = Decimal::from_i128_with_scale(i64::MAX as i128, 19);
-    let stream = conn.query("SELECT @P1", &[&num]).await?;
-
-    let rows: Vec<_> = stream
-        .map_ok(|x| x.get::<_, Decimal>(0))
-        .try_collect()
-        .await?;
-
-    assert_eq!(num, rows[0]);
-
-    Ok(())
-}
-
-#[tokio::test]
-#[cfg(feature = "rust_decimal")]
-async fn decimal_type_u128_presentation() -> Result<()> {
-    use rust_decimal::Decimal;
-
-    let mut conn = connect().await?;
-    let num = Decimal::from_i128_with_scale(i64::MAX as i128, 28);
-    let stream = conn.query("SELECT @P1", &[&num]).await?;
-
-    let rows: Vec<_> = stream
-        .map_ok(|x| x.get::<_, Decimal>(0))
-        .try_collect()
-        .await?;
-
-    assert_eq!(num, rows[0]);
-
-    Ok(())
-}
-
-#[tokio::test]
 #[cfg(all(feature = "chrono", feature = "tds73"))]
-async fn naive_small_date_time_tds73() -> Result<()> {
+#[test]
+fn test_naive_small_date_time_tds73() -> Result<()> {
+    smol::run( async {
     use chrono::{NaiveDate, NaiveDateTime};
 
     let mut conn = connect().await?;
@@ -914,7 +840,8 @@ async fn naive_small_date_time_tds73() -> Result<()> {
 
     conn.execute("INSERT INTO ##TestSmallDt (date) VALUES (@P1)", &[&dt])
         .await?
-        .total();
+        .total()
+        .await?;
 
     let stream = conn.query("SELECT date FROM ##TestSmallDt", &[]).await?;
 
@@ -925,11 +852,14 @@ async fn naive_small_date_time_tds73() -> Result<()> {
 
     assert_eq!(dt, rows[0]);
     Ok(())
+    })
 }
 
-#[tokio::test]
+
 #[cfg(all(feature = "chrono", feature = "tds73"))]
-async fn naive_date_time2_tds73() -> Result<()> {
+#[test]
+fn test_naive_date_time2_tds73() -> Result<()> {
+    smol::run( async {
     use chrono::{NaiveDate, NaiveDateTime};
 
     let mut conn = connect().await?;
@@ -940,7 +870,8 @@ async fn naive_date_time2_tds73() -> Result<()> {
 
     conn.execute("INSERT INTO ##NaiveDateTime2 (date) VALUES (@P1)", &[&dt])
         .await?
-        .total();
+        .total()
+        .await?;
 
     let stream = conn.query("SELECT date FROM ##NaiveDateTime2", &[]).await?;
 
@@ -951,11 +882,14 @@ async fn naive_date_time2_tds73() -> Result<()> {
 
     assert_eq!(dt, rows[0]);
     Ok(())
+    })
 }
 
-#[tokio::test]
+
 #[cfg(all(feature = "chrono", not(feature = "tds73")))]
-async fn naive_date_time_tds72() -> Result<()> {
+#[test]
+fn test_naive_date_time_tds72() -> Result<()> {
+    smol::run( async {
     use chrono::{NaiveDate, NaiveDateTime};
 
     let mut conn = connect().await?;
@@ -970,11 +904,14 @@ async fn naive_date_time_tds72() -> Result<()> {
 
     assert_eq!(dt, rows[0]);
     Ok(())
+    })
 }
 
-#[tokio::test]
+
 #[cfg(all(feature = "chrono", feature = "tds73"))]
-async fn naive_time() -> Result<()> {
+#[test]
+fn test_naive_time() -> Result<()> {
+    smol::run( async {
     use chrono::NaiveTime;
 
     let mut conn = connect().await?;
@@ -989,11 +926,14 @@ async fn naive_time() -> Result<()> {
 
     assert_eq!(time, rows[0]);
     Ok(())
+    })
 }
 
-#[tokio::test]
+
 #[cfg(all(feature = "chrono", feature = "tds73"))]
-async fn naive_date() -> Result<()> {
+#[test]
+fn test_naive_date() -> Result<()> {
+    smol::run( async {
     use chrono::NaiveDate;
 
     let mut conn = connect().await?;
@@ -1008,11 +948,13 @@ async fn naive_date() -> Result<()> {
 
     assert_eq!(date, rows[0]);
     Ok(())
+    })
 }
 
-#[tokio::test]
+
 #[cfg(all(feature = "chrono", feature = "tds73"))]
-async fn date_time_utc() -> Result<()> {
+fn test_date_time_utc() -> Result<()> {
+    smol::run( async {
     use chrono::{offset::Utc, DateTime, NaiveDate};
 
     let mut conn = connect().await?;
@@ -1028,58 +970,29 @@ async fn date_time_utc() -> Result<()> {
 
     assert_eq!(dt, rows[0]);
     Ok(())
+    })
 }
 
-#[tokio::test]
+
 #[cfg(all(feature = "chrono", feature = "tds73"))]
-async fn date_time_fixed() -> Result<()> {
-    use chrono::{offset::FixedOffset, DateTime, NaiveDate};
+#[test]
+fn test_date_time_fixed() -> Result<()> {
+    smol::run( async {
+        use chrono::{offset::FixedOffset, DateTime, NaiveDate};
 
-    let mut conn = connect().await?;
-    let naive = NaiveDate::from_ymd(2020, 4, 20).and_hms(16, 20, 0);
-    let fixed = FixedOffset::east(3600 * 3);
-    let dt: DateTime<FixedOffset> = DateTime::from_utc(naive, fixed);
+        let mut conn = connect().await?;
+        let naive = NaiveDate::from_ymd(2020, 4, 20).and_hms(16, 20, 0);
+        let fixed = FixedOffset::east(3600 * 3);
+        let dt: DateTime<FixedOffset> = DateTime::from_utc(naive, fixed);
 
-    let stream = conn.query("SELECT @P1", &[&dt]).await?;
+        let stream = conn.query("SELECT @P1", &[&dt]).await?;
 
-    let rows: Vec<_> = stream
-        .map_ok(|x| x.get::<_, DateTime<FixedOffset>>(0))
-        .try_collect()
-        .await?;
+        let rows: Vec<_> = stream
+            .map_ok(|x| x.get::<_, DateTime<FixedOffset>>(0))
+            .try_collect()
+            .await?;
 
-    assert_eq!(dt, rows[0]);
-    Ok(())
-}
-
-#[tokio::test]
-async fn xml_read_write() -> Result<()> {
-    let mut conn = connect().await?;
-
-    let xml = XmlData::new("<root><child attr=\"attr-value\"/></root>");
-    let stream = conn.query("SELECT @P1", &[&xml]).await?;
-
-    let rows: Vec<_> = stream
-        .map_ok(|x| x.get::<_, XmlData>(0))
-        .try_collect()
-        .await?;
-
-    assert_eq!(xml, rows[0]);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn xml_read_null_xml() -> Result<()> {
-    let mut conn = connect().await?;
-    let mut stream = conn.query("SELECT CAST(NULL AS XML)", &[]).await?;
-    let mut rows: Vec<Option<XmlData>> = Vec::new();
-
-    while let Some(row) = stream.try_next().await? {
-        let s: Option<XmlData> = row.try_get(0)?;
-        rows.push(s);
-    }
-
-    assert_eq!(None, rows[0]);
-
-    Ok(())
+        assert_eq!(dt, rows[0]);
+        Ok(())
+    })
 }
