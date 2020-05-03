@@ -3,7 +3,7 @@ use crate::{
     SqlReadBytes,
 };
 use std::sync::Arc;
-use tokio::io::AsyncReadExt;
+use futures::io::AsyncReadExt;
 
 #[derive(Debug)]
 pub struct TokenRow {

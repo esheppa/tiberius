@@ -4,6 +4,7 @@ mod tls;
 
 pub use builder::*;
 pub(crate) use connection::*;
+pub use connection::{GenericTcpStream, find_tcp_port};
 
 use crate::{
     result::{ExecuteResult, QueryResult},
@@ -94,11 +95,11 @@ impl AuthMethod {
 /// ```
 ///
 /// [`ClientBuilder`]: struct.ClientBuilder.html
-pub struct Client {
-    connection: Connection,
+pub struct Client<S: futures::AsyncRead + futures::AsyncWrite + Unpin> {
+    connection: Connection<S>,
 }
 
-impl Client {
+impl<S: futures::AsyncRead + futures::AsyncWrite + Unpin> Client<S> {
     /// Starts an instance of [`ClientBuilder`] for specifying the connect
     /// options.
     ///

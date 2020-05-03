@@ -2,8 +2,30 @@ use futures_util::{StreamExt, TryStreamExt};
 use once_cell::sync::Lazy;
 use std::env;
 use std::sync::Once;
-use tiberius::{Client, ClientBuilder, Result};
+//use tiberius::{Client, ClientBuilder, Result};
 use uuid::Uuid;
+
+use tiberius::{ClientBuilder, Result, Client, GenericTcpStream};
+use tokio_util::compat::{self, Tokio02AsyncWriteCompatExt};
+use tokio::{io, net};
+use async_trait::async_trait;
+
+pub struct TokioTcpStreamWrapper();
+
+#[async_trait]
+impl GenericTcpStream<compat::Compat<net::TcpStream>> for TokioTcpStreamWrapper {
+    async fn connect(&self, addr: String, instance_name: &Option<String>) -> tiberius::Result<compat::Compat<net::TcpStream>> 
+    {
+        let mut addr = tokio::net::lookup_host(addr).await?.next().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "Could not resolve server host.")
+        })?;
+
+        if let Some(ref instance_name) = instance_name {
+            addr = tiberius::find_tcp_port(addr, instance_name).await?;
+        };
+        Ok(net::TcpStream::connect(addr).await.map(|s| s.compat_write())?)
+    }
+}
 
 static LOGGER_SETUP: Once = Once::new();
 
@@ -12,13 +34,13 @@ static CONN_STR: Lazy<String> = Lazy::new(|| {
         .unwrap_or("server=tcp:localhost,1433;TrustServerCertificate=true".to_owned())
 });
 
-async fn connect() -> Result<Client> {
+async fn connect() -> Result<Client<compat::Compat<net::TcpStream>>> {
     LOGGER_SETUP.call_once(|| {
         env_logger::init();
     });
 
     let builder = ClientBuilder::from_ado_string(&*CONN_STR)?;
-    builder.build().await
+    builder.build(TokioTcpStreamWrapper()).await
 }
 
 #[cfg(feature = "tls")]
@@ -29,7 +51,7 @@ async fn test_conn_full_encryption() -> Result<()> {
     });
 
     let conn_str = format!("{};encrypt=true", *CONN_STR);
-    let mut conn = ClientBuilder::from_ado_string(&conn_str)?.build().await?;
+    let mut conn = ClientBuilder::from_ado_string(&conn_str)?.build(TokioTcpStreamWrapper()).await?;
 
     let stream = conn.query("SELECT @P1", &[&-4i32]).await?;
 

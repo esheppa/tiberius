@@ -13,7 +13,7 @@ use std::{
     sync::atomic::{AtomicU32, AtomicU8, Ordering},
     sync::Arc,
 };
-use tokio::sync::Mutex;
+use futures::lock::Mutex;
 
 /// The amount of bytes a packet header consists of
 pub(crate) const HEADER_BYTES: usize = 8;

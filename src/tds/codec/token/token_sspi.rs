@@ -1,6 +1,6 @@
 use crate::{tds::codec::Encode, sql_read_bytes::SqlReadBytes};
 use bytes::BytesMut;
-use tokio::io::AsyncReadExt;
+use futures::io::AsyncReadExt;
 
 #[derive(Debug)]
 pub struct TokenSSPI(Vec<u8>);
