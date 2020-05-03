@@ -6,7 +6,7 @@ use crate::{
         TokenColMetaData, TokenDone, TokenEnvChange, TokenError, TokenInfo, TokenLoginAck,
         TokenOrder, TokenReturnValue, TokenRow,
     },
-    Error, SqlReadBytes, TokenType,
+    Error, SqlReadBytes, TokenType, read_u8,
 };
 use futures::{Stream, TryStreamExt};
 use std::{
@@ -14,7 +14,7 @@ use std::{
     pin::Pin,
     sync::{atomic::Ordering, Arc},
 };
-use tokio::io::AsyncReadExt;
+//use futures::io::AsyncReadExt;
 use tracing::{event, Level};
 
 #[derive(Debug)]
@@ -34,12 +34,14 @@ pub enum ReceivedToken {
     SSPI(TokenSSPI),
 }
 
-pub(crate) struct TokenStream<'a> {
-    conn: &'a mut Connection,
+pub(crate) struct TokenStream<'a, S: futures::AsyncRead + futures::AsyncWrite + Unpin> {
+    conn: &'a mut Connection<S>,
 }
 
-impl<'a> TokenStream<'a> {
-    pub(crate) fn new(conn: &'a mut Connection) -> Self {
+impl<'a, S> TokenStream<'a, S> 
+    where S: futures::AsyncRead + futures::AsyncWrite + Unpin
+{
+    pub(crate) fn new(conn: &'a mut Connection<S>) -> Self {
         Self { conn }
     }
 
@@ -172,7 +174,7 @@ impl<'a> TokenStream<'a> {
                 return Ok(None);
             }
 
-            let ty_byte = this.conn.read_u8().await?;
+            let ty_byte = read_u8(this.conn).await?;
 
             let ty = TokenType::try_from(ty_byte)
                 .map_err(|_| Error::Protocol(format!("invalid token type {:x}", ty_byte).into()))?;
