@@ -1,6 +1,6 @@
 use crate::{
     tds::codec::{read_varchar, TypeInfo, VarLenType},
-    SqlReadBytes, read_u8,
+    SqlReadBytes,
 };
 use bitflags::bitflags;
 
@@ -57,7 +57,7 @@ impl TokenColMetaData {
             // read all metadata for each column
             for _ in 0..column_count {
                 let base = BaseMetaDataColumn::decode(src).await?;
-                let col_name_len = read_u8(src).await?;
+                let col_name_len = src.read_u8().await?;
 
                 let meta = MetaDataColumn {
                     base,
@@ -115,12 +115,11 @@ impl BaseMetaDataColumn {
         let cmd_user_ty = try!(self.read_u32::<LittleEndian>());
         let cmd_ty_info: TypeInfo = try!(self.unserialize(ctx));
         let cmd_encryption_algo = try!(self.read_u8());
-        // TODO:
+        TODO:
         assert_eq!(cmd_encryption_algo, 0);
         let cmd_algo_name = try!(self.read_varchar::<u8>());
         let cmd_algo_type = try!(self.read_u8());
-        let cmd_norm_version = try!(self.read_u8());*/
-
+        cmd_norm_version = try!(self.read_u8());*/
         Ok(BaseMetaDataColumn { flags, ty })
     }
 }
