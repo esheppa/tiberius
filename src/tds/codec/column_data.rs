@@ -2,7 +2,7 @@ use super::{read_varchar, Encode, FixedLenType, TypeInfo, VarLenType};
 use crate::tds::{Collation, DateTime, SmallDateTime};
 #[cfg(feature = "tds73")]
 use crate::tds::{Date, DateTime2, DateTimeOffset, Time};
-use crate::{tds::Numeric, Error, SqlReadBytes, read_u8, read_i8};
+use crate::{tds::Numeric, Error, SqlReadBytes};
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::{BufMut, BytesMut};
 use encoding::DecoderTrap;
@@ -125,8 +125,8 @@ impl<'a> ColumnData<'a> {
     {
         let ret = match ty {
             FixedLenType::Null => ColumnData::None,
-            FixedLenType::Bit => ColumnData::Bit(read_u8(src).await? != 0),
-            FixedLenType::Int1 => ColumnData::I8(read_i8(src).await?),
+            FixedLenType::Bit => ColumnData::Bit(src.read_u8().await? != 0),
+            FixedLenType::Int1 => ColumnData::I8(src.read_i8().await?),
             FixedLenType::Int2 => ColumnData::I16(src.read_i16_le().await?),
             FixedLenType::Int4 => ColumnData::I32(src.read_i32_le().await?),
             FixedLenType::Int8 => ColumnData::I64(src.read_i64_le().await?),
@@ -169,12 +169,12 @@ impl<'a> ColumnData<'a> {
             low_part + high_part
         }
 
-        let len = read_u8(src).await?;
+        let len = src.read_u8().await?;
 
         if len == 0 {
             Ok(ColumnData::None)
         } else {
-            let sign = match read_u8(src).await? {
+            let sign = match src.read_u8().await? {
                 0 => -1i128,
                 1 => 1i128,
                 _ => return Err(Error::Protocol("decimal: invalid sign".into())),
@@ -186,14 +186,14 @@ impl<'a> ColumnData<'a> {
                 13 => {
                     let mut bytes = [0u8; 12]; //u96
                     for i in 0..12 {
-                        bytes[i] = read_u8(src).await?;
+                        bytes[i] = src.read_u8().await?;
                     }
                     decode_d128(&bytes) as i128 * sign
                 }
                 17 => {
                     let mut bytes = [0u8; 16]; //u96
                     for i in 0..16 {
-                        bytes[i] = read_u8(src).await?;
+                        bytes[i] = src.read_u8().await?;
                     }
                     decode_d128(&bytes) as i128 * sign
                 }
@@ -231,7 +231,7 @@ impl<'a> ColumnData<'a> {
             VarLenType::BigVarChar => Self::decode_big_varchar(src, len, collation).await?,
             VarLenType::Money => Self::decode_money(src).await?,
             VarLenType::Datetimen => {
-                let len = read_u8(src).await?;
+                let len = src.read_u8().await?;
                 Self::decode_datetimen(src, len).await?
             }
 
@@ -240,14 +240,14 @@ impl<'a> ColumnData<'a> {
 
             #[cfg(feature = "tds73")]
             VarLenType::Timen => {
-                let rlen = read_u8(src).await?;
+                let rlen = src.read_u8().await?;
 
                 ColumnData::Time(Time::decode(src, len as usize, rlen as usize).await?)
             }
 
             #[cfg(feature = "tds73")]
             VarLenType::Datetime2 => {
-                let rlen = read_u8(src).await? - 3;
+                let rlen = src.read_u8().await? - 3;
                 ColumnData::DateTime2(DateTime2::decode(src, len as usize, rlen as usize).await?)
             }
 
@@ -422,7 +422,7 @@ impl<'a> ColumnData<'a> {
     where
         R: SqlReadBytes + Unpin,
     {
-        let len = read_u8(src).await?;
+        let len = src.read_u8().await?;
 
         let res = match len {
             0 => ColumnData::None,
@@ -459,11 +459,11 @@ impl<'a> ColumnData<'a> {
     where
         R: SqlReadBytes + Unpin,
     {
-        let recv_len = read_u8(src).await? as usize;
+        let recv_len = src.read_u8().await? as usize;
 
         let res = match recv_len {
             0 => ColumnData::None,
-            1 => ColumnData::Bit(read_u8(src).await? > 0),
+            1 => ColumnData::Bit(src.read_u8().await? > 0),
             v => {
                 return Err(Error::Protocol(
                     format!("bitn: length of {} is invalid", v).into(),
@@ -478,11 +478,11 @@ impl<'a> ColumnData<'a> {
     where
         R: SqlReadBytes + Unpin,
     {
-        let recv_len = read_u8(src).await? as usize;
+        let recv_len = src.read_u8().await? as usize;
 
         let res = match recv_len {
             0 => ColumnData::None,
-            1 => ColumnData::I8(read_i8(src).await?),
+            1 => ColumnData::I8(src.read_i8().await?),
             2 => ColumnData::I16(src.read_i16_le().await?),
             4 => ColumnData::I32(src.read_i32_le().await?),
             8 => ColumnData::I64(src.read_i64_le().await?),
@@ -496,7 +496,7 @@ impl<'a> ColumnData<'a> {
     where
         R: SqlReadBytes + Unpin,
     {
-        let len = read_u8(src).await? as usize;
+        let len = src.read_u8().await? as usize;
 
         let res = match len {
             0 => ColumnData::None,
@@ -516,7 +516,7 @@ impl<'a> ColumnData<'a> {
     where
         R: SqlReadBytes + Unpin,
     {
-        let len = read_u8(src).await? as usize;
+        let len = src.read_u8().await? as usize;
 
         let res = match len {
             0 => ColumnData::None,
@@ -524,7 +524,7 @@ impl<'a> ColumnData<'a> {
                 let mut data = [0u8; 16];
 
                 for i in 0..16 {
-                    data[i] = read_u8(src).await?;
+                    data[i] = src.read_u8().await?;
                 }
 
                 ColumnData::Guid(Uuid::from_slice(&data)?)
@@ -543,7 +543,7 @@ impl<'a> ColumnData<'a> {
     where
         R: SqlReadBytes + Unpin,
     {
-        let ptr_len = read_u8(src).await? as usize;
+        let ptr_len = src.read_u8().await? as usize;
 
         if ptr_len == 0 {
             Ok(ColumnData::None)
@@ -567,7 +567,7 @@ impl<'a> ColumnData<'a> {
     where
         R: SqlReadBytes + Unpin,
     {
-        let ptr_len = read_u8(src).await? as usize;
+        let ptr_len = src.read_u8().await? as usize;
 
         if ptr_len == 0 {
             Ok(ColumnData::None)
@@ -650,7 +650,7 @@ impl<'a> ColumnData<'a> {
     where
         R: SqlReadBytes + Unpin,
     {
-        let len = read_u8(src).await?;
+        let len = src.read_u8().await?;
 
         let res = match len {
             0 => ColumnData::None,
@@ -732,7 +732,7 @@ impl<'a> ColumnData<'a> {
                     }
                 } else {
                     // Just read a byte
-                    let byte = read_u8(src).await?;
+                    let byte = src.read_u8().await?;
                     read_state.chunk_data_left -= 1;
 
                     buf.push(byte);
