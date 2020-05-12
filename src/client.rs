@@ -4,7 +4,7 @@ mod tls;
 
 pub use builder::*;
 pub(crate) use connection::*;
-pub use connection::{GenericTcpStream, find_tcp_port};
+pub use connection::find_tcp_port;
 
 use crate::{
     result::{ExecuteResult, QueryResult},
