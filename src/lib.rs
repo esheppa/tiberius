@@ -17,7 +17,7 @@ mod result;
 mod row;
 mod tds;
 
-pub use client::{AuthMethod, Client, ClientBuilder, GenericTcpStream, find_tcp_port};
+pub use client::{AuthMethod, Client, ClientBuilder, find_tcp_port};
 pub(crate) use error::Error;
 pub use result::*;
 pub use row::{Column, ColumnType, Row};
