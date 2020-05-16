@@ -14,7 +14,7 @@ use crate::{
     SqlReadBytes, ToSql,
 };
 use codec::{ColumnData, PacketHeader, RpcParam, RpcProcId, RpcProcIdValue, TokenRpcRequest};
-use std::{borrow::Cow, fmt::Debug};
+use std::{borrow::Cow, fmt::Debug, future::Future, pin::Pin};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SqlServerAuth {
@@ -55,8 +55,7 @@ impl AuthMethod {
             password: password.to_string(),
         })
     }
-
-    /// Construct a new Windows authentication configuration. Only available on
+/// Construct a new Windows authentication configuration. Only available on
     /// Windows platforms.
     #[cfg(any(windows, doc))]
     pub fn windows(user: impl AsRef<str>, password: impl ToString) -> Self {
@@ -79,8 +78,15 @@ impl AuthMethod {
 /// A `Client` is created using the [`ClientBuilder`], defining the needed
 /// connection options and capabilities.
 ///
+/// We reccomend to use a provided crate where this has been implemented on a runtime
+/// they include: `tiberius_asyncstd`, `tiberius_smol` and `tiberius_tokio`.
+///
+/// Alternatively one of the above implementations could be used as a base to implement
+/// tiberius on an alternative runtime.
+///
 /// ```no_run
-/// # use tiberius::{Client, AuthMethod};
+/// # use tiberius_tokio::Client;
+/// # use tiberius::AuthMethod;
 /// # #[allow(unused)]
 /// # async fn foo() -> Result<(), Box<dyn std::error::Error>> {
 /// let mut builder = Client::builder();
@@ -106,8 +112,12 @@ impl<S: futures::AsyncRead + futures::AsyncWrite + Unpin> Client<S> {
     /// options.
     ///
     /// [`ClientBuilder`]: struct.ClientBuilder.html
-    pub fn builder() -> ClientBuilder {
-        ClientBuilder::default()
+    pub fn builder<W>(
+        wrapper: fn(Client<S>) -> W,
+        connector: fn(String, Option<String>) -> Pin<Box<dyn Future<Output = crate::Result<S>>>>
+        ) -> ClientBuilder<S, W> 
+    {
+        ClientBuilder::new(wrapper, connector)
     }
 
     /// Executes SQL statements in the SQL Server, returning the number rows
@@ -117,7 +127,7 @@ impl<S: futures::AsyncRead + futures::AsyncWrite + Unpin> Client<S> {
     /// `@PN`, where N is the index of the parameter, starting from `1`.
     ///
     /// ```no_run
-    /// # use tiberius::Client;
+    /// # use tiberius_tokio::Client;
     /// # #[allow(unused)]
     /// # async fn foo() -> Result<(), Box<dyn std::error::Error>> {
     /// # let builder = Client::builder();
@@ -160,7 +170,7 @@ impl<S: futures::AsyncRead + futures::AsyncWrite + Unpin> Client<S> {
     /// `@PN`, where N is the index of the parameter, starting from `1`.
     ///
     /// ```no_run
-    /// # use tiberius::Client;
+    /// # use tiberius_tokio::Client;
     /// # #[allow(unused)]
     /// # async fn foo() -> Result<(), Box<dyn std::error::Error>> {
     /// # let builder = Client::builder();

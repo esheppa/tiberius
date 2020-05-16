@@ -21,7 +21,8 @@ use task::Poll;
 /// should not be polled anymore.
 ///
 /// ```
-/// # use tiberius::{Client, AuthMethod};
+/// # use tiberius_tokio::Client;
+/// # use tiberius::AuthMethod;
 /// # use std::env;
 /// use futures::{StreamExt, TryStreamExt};
 /// # #[allow(unused)]
@@ -101,7 +102,8 @@ impl<'a> QueryResult<'a> {
     /// result set.
     ///
     /// ```no_run
-    /// # use tiberius::{Client, AuthMethod};
+    /// # use tiberius_tokio::Client;
+    /// # use tiberius::AuthMethod;
     /// # use std::env;
     /// # #[allow(unused)]
     /// # async fn foo() -> Result<(), Box<dyn std::error::Error>> {
@@ -187,7 +189,8 @@ impl<'a> Stream for QueryResult<'a> {
 /// marking the rows affected for each query.
 ///
 /// ```no_run
-/// # use tiberius::{Client, AuthMethod};
+/// # use tiberius_tokio::Client;
+/// # use tiberius::AuthMethod;
 /// # use std::env;
 /// # #[allow(unused)]
 /// # async fn foo() -> Result<(), Box<dyn std::error::Error>> {
@@ -249,7 +252,7 @@ impl<'a> ExecuteResult {
     /// Aggregates all resulting row counts into a sum.
     ///
     /// ```no_run
-    /// # use tiberius::ClientBuilder;
+    /// # use tiberius_tokio::ClientBuilder;
     /// # use std::env;
     /// # #[allow(unused)]
     /// # async fn foo() -> Result<(), Box<dyn std::error::Error>> {
