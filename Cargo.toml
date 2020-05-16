@@ -3,6 +3,7 @@ members = [
     "tiberius",
     "tiberius-asyncstd",
     "tiberius-tokio",
+    "tiberius-smol",
     "tests",
     "examples",
 ]
