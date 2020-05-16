@@ -1,7 +1,5 @@
 #[cfg(feature = "tls")]
 use crate::client::tls::TlsPreloginWrapper;
-#[cfg(windows)]
-use crate::Error;
 use crate::{
     client::{tls::MaybeTlsStream, AuthMethod},
     tds::{
@@ -19,8 +17,6 @@ use bytes::BytesMut;
 use codec::TokenSSPI;
 use futures::{ready, SinkExt, Stream, TryStream, TryStreamExt};
 use pretty_hex::*;
-#[cfg(windows)]
-use std::time::Duration;
 use std::{cmp, fmt::Debug, io, pin::Pin, sync::atomic::Ordering, task};
 use task::Poll;
 use futures_codec::Framed;
