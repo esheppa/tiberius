@@ -80,7 +80,7 @@ impl AuthMethod {
 /// connection options and capabilities.
 ///
 /// We reccomend to use a provided crate where this has been implemented on a runtime
-/// they include: `tiberius_asyncstd`, `tiberius_smol` and `tiberius_tokio`.
+/// they include: `tiberius_async_std` and `tiberius_tokio`.
 ///
 /// Alternatively one of the above implementations could be used as a base to implement
 /// tiberius on an alternative runtime.
