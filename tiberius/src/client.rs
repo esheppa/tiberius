@@ -14,7 +14,8 @@ use crate::{
     SqlReadBytes, ToSql,
 };
 use codec::{ColumnData, PacketHeader, RpcParam, RpcProcId, RpcProcIdValue, TokenRpcRequest};
-use std::{borrow::Cow, fmt::Debug, future::Future, pin::Pin};
+use std::{borrow::Cow, fmt::Debug};
+use futures::future;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SqlServerAuth {
@@ -112,10 +113,10 @@ impl<S: futures::AsyncRead + futures::AsyncWrite + Unpin> Client<S> {
     /// options.
     ///
     /// [`ClientBuilder`]: struct.ClientBuilder.html
-    pub fn builder<W>(
+    pub fn builder<'a, W>(
         wrapper: fn(Client<S>) -> W,
-        connector: fn(String, Option<String>) -> Pin<Box<dyn Future<Output = crate::Result<S>>>>
-        ) -> ClientBuilder<S, W> 
+        connector: fn(String, Option<String>) -> future::BoxFuture<'a, crate::Result<S>>
+        ) -> ClientBuilder<'a, S, W> 
     {
         ClientBuilder::new(wrapper, connector)
     }

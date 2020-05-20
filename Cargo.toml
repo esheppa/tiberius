@@ -1,9 +1,8 @@
 [workspace]
 members = [
     "tiberius",
-    "tiberius-asyncstd",
+    "tiberius-async-std",
     "tiberius-tokio",
-    "tiberius-smol",
     "tests",
     "examples",
 ]
