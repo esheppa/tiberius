@@ -4,5 +4,6 @@ members = [
     "tiberius-async-std",
     "tiberius-tokio",
     "tests",
+    "runtimes-macro",
     "examples",
 ]
