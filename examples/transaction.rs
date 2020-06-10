@@ -19,6 +19,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .await;
 
+        let _ = handle.transaction(|innerhandle| Box::pin(async move {
+            let _ = innerhandle.execute(
+                "INSERT INTO #Test (id) VALUES (@P1), (@P2), (@P3)",
+                &[&1i32, &2i32, &3i32],
+            )
+            .await;
+            innerhandle.execute(
+                "INSERT INTO #Test (id) VALUES (@P1), (@P2), (@P3)",
+                &[&4i32, &5i32, &6i32],
+            )
+            .await
+        })).await?;
+
         handle.execute(
             "INSERT INTO #Test (id) VALUES (@P1), (@P2), (@P3)",
             &[&4i32, &5i32, &6i32],
