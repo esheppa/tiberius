@@ -113,6 +113,64 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
         Ok(ExecuteResult::new(&mut self.connection).await?)
     }
 
+    /// Executes SQL statements in the SQL Server, returning the number rows
+    /// affected. Useful for `INSERT`, `UPDATE` and `DELETE` statements. The
+    /// `query` can define the parameter placement by annotating them with
+    /// `@PN`, where N is the index of the parameter, starting from `1`. If
+    /// executing multiple queries at a time, delimit them with `;` and refer to
+    /// [`ExecuteResult`] how to get results for the separate queries.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use tiberius::Config;
+    /// # use tokio_util::compat::Tokio02AsyncWriteCompatExt;
+    /// # use std::env;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let c_str = env::var("TIBERIUS_TEST_CONNECTION_STRING").unwrap_or(
+    /// #     "server=tcp:localhost,1433;integratedSecurity=true;TrustServerCertificate=true".to_owned(),
+    /// # );
+    /// # let config = Config::from_ado_string(&c_str)?;
+    /// # let tcp = tokio::net::TcpStream::connect(config.get_addr()).await?;
+    /// # tcp.set_nodelay(true)?;
+    /// # let mut client = tiberius::Client::connect(config, tcp.compat_write()).await?;
+    /// let results = client.transaction(|client| Box::pin(async move {
+    ///     client.execute(
+    ///         "INSERT INTO ##Test (id) VALUES (@P1), (@P2), (@P3)",
+    ///         &[&1i32, &2i32, &3i32],
+    ///     )
+    ///     .await?;
+    ///
+    ///     client.execute(
+    ///         "INSERT INTO ##Test (id) VALUES (@P1), (@P2), (@P3)",
+    ///         &[&4i32, &5i32, &6i32],
+    ///     )
+    ///     .await
+    ///     })
+    /// ).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// [`ExecuteResult`]: struct.ExecuteResult.html
+    pub async fn transaction<'a, FN>(
+        &mut self,
+        task: FN,
+    ) -> crate::Result<ExecuteResult> 
+    where 
+        FN: for<'b> FnOnce(&'b mut Client<S>) -> futures::future::BoxFuture<'b, crate::Result<ExecuteResult>>
+    {
+        let _ = self.execute("BEGIN TRANSACTION", &[]).await?;
+        let task_res = task(self).await;
+        if task_res.is_ok() {
+            let _ = self.execute("COMMIT TRANSACTION", &[]).await?;
+        } else {
+            let _ = self.execute("ROLLBACK TRANSACTION", &[]).await?;
+        }
+        task_res
+    }
+
     /// Executes SQL statements in the SQL Server, returning resulting rows.
     /// Useful for `SELECT` statements. The `query` can define the parameter
     /// placement by annotating them with `@PN`, where N is the index of the
