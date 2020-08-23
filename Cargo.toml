@@ -84,6 +84,22 @@ version = "0.3"
 optional = true
 version = "0.3"
 
+[dependencies.async-tls]
+optional = true
+version = "0.9"
+default-features = false
+features = ["client"]
+
+[dependencies.rustls-crate]
+optional = true
+version = "0.18"
+package = "rustls"
+features = ["dangerous_configuration"]
+
+[dependencies.webpki]
+optional = true
+version = "0.21"
+
 [dependencies.tracing]
 features = ["log"]
 version = "0.1"
@@ -113,11 +129,12 @@ anyhow = "1"
 env_logger = "0.7"
 
 [package.metadata.docs.rs]
-features = ["tls", "chrono", "tds73", "sql-browser-async-std", "sql-browser-tokio"]
+features = ["tls", "rustls", "chrono", "tds73", "sql-browser-async-std", "sql-browser-tokio"]
 
 [features]
 default = ["tls", "tds73"]
 tls = ["async-native-tls"]
+rustls = ["async-tls", "rustls-crate", "webpki"]
 tds73 = []
 sql-browser-async-std = ["async-std"]
 sql-browser-tokio = ["tokio", "tokio-util"]
