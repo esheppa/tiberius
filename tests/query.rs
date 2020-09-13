@@ -74,7 +74,6 @@ where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
     for _ in 1..300 {
-
         conn.simple_query("BEGIN TRAN").await?;
 
         let row = conn
