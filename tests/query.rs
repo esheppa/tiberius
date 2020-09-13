@@ -27,11 +27,11 @@ async fn random_table() -> String {
 }
 
 //#[cfg(feature = "tls")]
-#[cfg(any(feature = "tls", feature="rustls"))]
+#[cfg(any(feature = "tls", feature = "rustls"))]
 static ENCRYPTED_CONN_STR: Lazy<String> = Lazy::new(|| format!("{};encrypt=true", *CONN_STR));
 
 //#[cfg(feature = "tls")]
-#[cfg(any(feature = "tls", feature="rustls"))]
+#[cfg(any(feature = "tls", feature = "rustls"))]
 #[test_on_runtimes(connection_string = "ENCRYPTED_CONN_STR")]
 async fn connect_with_full_encryption<S>(mut conn: tiberius::Client<S>) -> Result<()>
 where
