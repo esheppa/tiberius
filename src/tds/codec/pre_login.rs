@@ -34,18 +34,18 @@ impl PreloginMessage {
     }
 
     pub fn negotiated_encryption(&self, expected: EncryptionLevel) -> EncryptionLevel {
-        match (expected, self.encryption) {
+        match dbg!((expected, self.encryption)) {
             (EncryptionLevel::NotSupported, EncryptionLevel::NotSupported) => {
                 EncryptionLevel::NotSupported
             }
-            #[cfg(feature = "tls")]
+            #[cfg(any(feature = "tls", feature = "rustls"))]
             (EncryptionLevel::Off, EncryptionLevel::Off) => EncryptionLevel::Off,
-            #[cfg(feature = "tls")]
+            #[cfg(any(feature = "tls", feature = "rustls"))]
             (EncryptionLevel::On, EncryptionLevel::Off)
             | (EncryptionLevel::On, EncryptionLevel::NotSupported) => {
                 panic!("Server does not allow the requested encryption level.")
             }
-            #[cfg(feature = "tls")]
+            #[cfg(any(feature = "tls", feature = "rustls"))]
             (_, _) => EncryptionLevel::On,
         }
     }

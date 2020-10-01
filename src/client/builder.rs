@@ -303,7 +303,7 @@ impl AdoNetString {
             .unwrap_or(Ok(false))
     }
 
-    #[cfg(feature = "tls")]
+    #[cfg(any(feature = "tls", feature = "rustls"))]
     pub fn encrypt(&self) -> crate::Result<EncryptionLevel> {
         self.dict
             .get("encrypt")
@@ -317,7 +317,7 @@ impl AdoNetString {
             .unwrap_or(Ok(EncryptionLevel::Off))
     }
 
-    #[cfg(not(feature = "tls"))]
+    #[cfg(not(any(feature = "tls", feature = "rustls")))]
     pub fn encrypt(&self) -> crate::Result<EncryptionLevel> {
         Ok(EncryptionLevel::NotSupported)
     }

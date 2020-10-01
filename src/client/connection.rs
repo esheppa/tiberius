@@ -62,8 +62,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Debug for Connection<S> {
 
 impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
     /// Creates a new connection
-    pub(crate) async fn connect(config: Config, tcp_stream: S) -> crate::Result<Connection<S>>
-where {
+    pub(crate) async fn connect(config: Config, tcp_stream: S) -> crate::Result<Connection<S>> {
         let context = {
             let mut context = Context::new();
             context.set_spn(config.get_host(), config.get_port());
@@ -106,7 +105,7 @@ where {
         TokenStream::new(self).flush_sspi().await
     }
 
-    #[cfg(feature = "tls")]
+    #[cfg(any(feature = "tls", feature = "rustls"))]
     fn post_login_encryption(mut self, encryption: EncryptionLevel) -> Self {
         if let EncryptionLevel::Off = encryption {
             event!(
@@ -122,7 +121,7 @@ where {
         self
     }
 
-    #[cfg(not(feature = "tls"))]
+    #[cfg(not(any(feature = "tls", feature = "rustls")))]
     fn post_login_encryption(self, _: EncryptionLevel) -> Self {
         self
     }
@@ -381,6 +380,7 @@ where {
             let Self {
                 transport, context, ..
             } = self;
+
             let mut stream = match transport.release().0 {
                 MaybeTlsStream::Raw(tcp) => {
                     builder
@@ -423,8 +423,12 @@ where {
             event!(Level::INFO, "Performing a TLS handshake");
 
             let mut builder = rustls_crate::ClientConfig::new();
+
             if trust_cert {
+                builder.enable_sni = false;
+
                 struct ExtremelyBadVerifier();
+
                 impl rustls_crate::ServerCertVerifier for ExtremelyBadVerifier {
                     fn verify_server_cert(
                         &self,
@@ -437,7 +441,9 @@ where {
                         Ok(rustls_crate::ServerCertVerified::assertion())
                     }
                 }
+
                 let bad_verifier = ExtremelyBadVerifier();
+
                 builder
                     .dangerous()
                     .set_certificate_verifier(std::sync::Arc::new(bad_verifier));
@@ -446,6 +452,7 @@ where {
             let Self {
                 transport, context, ..
             } = self;
+
             let mut stream = match transport.release().0 {
                 MaybeTlsStream::Raw(tcp) => {
                     async_tls::TlsConnector::from(builder)
