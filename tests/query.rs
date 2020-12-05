@@ -105,14 +105,19 @@ where
         )
     "#,
         table
-    )).await?;
+    ))
+    .await?;
 
     let mut transaction = conn.begin_transaction().await?;
 
-    transaction.execute(format!("insert into ##{} (name) values (@P1)", table), &[&"carrot"]).await?;
+    transaction
+        .execute(
+            format!("insert into ##{} (name) values (@P1)", table),
+            &[&"carrot"],
+        )
+        .await?;
 
     transaction.commit().await?;
-
 
     let row = conn
         .query(
@@ -129,8 +134,12 @@ where
     {
         let mut transaction = conn.begin_transaction().await?;
 
-        transaction.execute(format!("insert into ##{} (name) values (@P1)", table), &[&"asparagus"]).await?;
-    
+        transaction
+            .execute(
+                format!("insert into ##{} (name) values (@P1)", table),
+                &[&"asparagus"],
+            )
+            .await?;
     }
 
     let row = conn
@@ -147,12 +156,15 @@ where
     {
         let mut transaction = conn.begin_transaction().await?;
 
-        transaction.execute(format!("insert into ##{} (name) values (@P1)", table), &[&"asparagus"]).await?;
+        transaction
+            .execute(
+                format!("insert into ##{} (name) values (@P1)", table),
+                &[&"asparagus"],
+            )
+            .await?;
 
         transaction.commit().await?;
-    
     }
-
 
     let row = conn
         .query(
