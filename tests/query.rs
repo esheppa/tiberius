@@ -91,6 +91,87 @@ where
 }
 
 #[test_on_runtimes]
+async fn transactions_with_methods<S>(mut conn: tiberius::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let table = random_table().await;
+
+    conn.simple_query(format!(
+        r#"
+        create table ##{} (
+            id int identity(1,1),
+            name varchar(50),
+        )
+    "#,
+        table
+    )).await?;
+
+    let mut transaction = conn.begin_transaction().await?;
+
+    transaction.execute(format!("insert into ##{} (name) values (@P1)", table), &[&"carrot"]).await?;
+
+    transaction.commit().await?;
+
+
+    let row = conn
+        .query(
+            format!("select id from ##{} where name = @P1", table),
+            &[&"carrot"],
+        )
+        .await?
+        .into_row()
+        .await?
+        .unwrap();
+
+    assert_eq!(row.get(0), Some(1));
+
+    {
+        let mut transaction = conn.begin_transaction().await?;
+
+        transaction.execute(format!("insert into ##{} (name) values (@P1)", table), &[&"asparagus"]).await?;
+    
+    }
+
+    let row = conn
+        .query(
+            format!("select id from ##{} where name = @P1", table),
+            &[&"asparagus"],
+        )
+        .await?
+        .into_row()
+        .await?;
+
+    assert!(if let None = row { true } else { false });
+
+    {
+        let mut transaction = conn.begin_transaction().await?;
+
+        transaction.execute(format!("insert into ##{} (name) values (@P1)", table), &[&"asparagus"]).await?;
+
+        transaction.commit().await?;
+    
+    }
+
+
+    let row = conn
+        .query(
+            format!("select id from ##{} where name = @P1", table),
+            &[&"asparagus"],
+        )
+        .await?
+        .into_row()
+        .await?
+        .unwrap();
+
+    // ID should be 3 instead of 2 as we will have incremented the
+    // sequence during the transaction which was eventually rolled back
+    assert_eq!(row.get(0), Some(3));
+
+    Ok(())
+}
+
+#[test_on_runtimes]
 async fn transactions_300<S>(mut conn: tiberius::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
