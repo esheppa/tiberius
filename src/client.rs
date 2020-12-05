@@ -19,49 +19,17 @@ use codec::{BatchRequest, ColumnData, PacketHeader, RpcParam, RpcProcId, TokenRp
 use futures::{AsyncRead, AsyncWrite};
 use std::{borrow::Cow, fmt::Debug};
 
-/// `Client` is the main entry point to the SQL Server, providing query
-/// execution capabilities.
-///
-/// A `Client` is created using the [`Config`], defining the needed
-/// connection options and capabilities.
-///
-/// # Example
-///
-/// ```no_run
-/// # use tiberius::{Config, AuthMethod};
-/// # use tokio_util::compat::Tokio02AsyncWriteCompatExt;
-/// # #[tokio::main]
-/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// let mut config = Config::new();
-///
-/// config.host("0.0.0.0");
-/// config.port(1433);
-/// config.authentication(AuthMethod::sql_server("SA", "<Mys3cureP4ssW0rD>"));
-///
-/// let tcp = tokio::net::TcpStream::connect(config.get_addr()).await?;
-/// tcp.set_nodelay(true)?;
-/// // Client is ready to use.
-/// let client = tiberius::Client::connect(config, tcp.compat_write()).await?;
-/// # Ok(())
-/// # }
-/// ```
-///
-/// [`Config`]: struct.Config.html
 #[derive(Debug)]
-pub struct Client<S: AsyncRead + AsyncWrite + Unpin + Send> {
-    connection: Connection<S>,
+pub struct Transaction<'conn, S: AsyncRead + AsyncWrite + Unpin + Send> {
+    client: &'conn mut Client<S>,
 }
 
-impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
-    /// Uses an instance of [`Config`] to specify the connection
-    /// options required to connect to the database using an established
-    /// tcp connection
-    ///
-    /// [`Config`]: struct.Config.html
-    pub async fn connect(config: Config, tcp_stream: S) -> crate::Result<Client<S>> {
-        Ok(Client {
-            connection: Connection::connect(config, tcp_stream).await?,
-        })
+impl<'conn, S: AsyncRead + AsyncWrite + Unpin + Send> Transaction<'conn, S> {
+    pub async fn commit(self) -> crate::Result<()> {
+        self.client.commit().await
+    }
+    pub async fn rollback(self) -> crate::Result<()> {
+        self.client.rollback().await
     }
 
     /// Executes SQL statements in the SQL Server, returning the number rows
@@ -104,6 +72,205 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
     /// [`ToSql`]: trait.ToSql.html
     /// [`FromSql`]: trait.FromSql.html
     pub async fn execute<'a>(
+        &mut self,
+        query: impl Into<Cow<'a, str>>,
+        params: &[&dyn ToSql],
+    ) -> crate::Result<ExecuteResult> {
+        self.client.execute_internal(query, params).await
+    }
+
+    /// Executes SQL statements in the SQL Server, returning resulting rows.
+    /// Useful for `SELECT` statements. The `query` can define the parameter
+    /// placement by annotating them with `@PN`, where N is the index of the
+    /// parameter, starting from `1`. If executing multiple queries at a time,
+    /// delimit them with `;` and refer to [`QueryResult`] on proper stream
+    /// handling.
+    ///
+    /// For mapping of Rust types when writing, see the documentation for
+    /// [`ToSql`]. For reading data from the database, see the documentation for
+    /// [`FromSql`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use tiberius::Config;
+    /// # use tokio_util::compat::Tokio02AsyncWriteCompatExt;
+    /// # use std::env;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let c_str = env::var("TIBERIUS_TEST_CONNECTION_STRING").unwrap_or(
+    /// #     "server=tcp:localhost,1433;integratedSecurity=true;TrustServerCertificate=true".to_owned(),
+    /// # );
+    /// # let config = Config::from_ado_string(&c_str)?;
+    /// # let tcp = tokio::net::TcpStream::connect(config.get_addr()).await?;
+    /// # tcp.set_nodelay(true)?;
+    /// # let mut client = tiberius::Client::connect(config, tcp.compat_write()).await?;
+    /// let stream = client
+    ///     .query(
+    ///         "SELECT @P1, @P2, @P3",
+    ///         &[&1i32, &2i32, &3i32],
+    ///     )
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// [`QueryResult`]: struct.QueryResult.html
+    /// [`ToSql`]: trait.ToSql.html
+    /// [`FromSql`]: trait.FromSql.html
+    pub async fn query<'a, 'b>(
+        &'a mut self,
+        query: impl Into<Cow<'b, str>>,
+        params: &'b [&'b dyn ToSql],
+    ) -> crate::Result<QueryResult<'a>>
+    where
+        'a: 'b,
+    {
+        self.client.query_internal(query, params).await
+    }
+}
+
+// impl<'conn, S: AsyncRead + AsyncWrite + Unpin + Send> Drop for Transaction<'conn, S> {
+//     fn drop(&mut self) {
+//         todo!()
+//     }
+// }
+
+#[derive(Debug)]
+enum TransactionState {
+    None,
+    InProgress,
+}
+
+/// `Client` is the main entry point to the SQL Server, providing query
+/// execution capabilities.
+///
+/// A `Client` is created using the [`Config`], defining the needed
+/// connection options and capabilities.
+///
+/// # Example
+///
+/// ```no_run
+/// # use tiberius::{Config, AuthMethod};
+/// # use tokio_util::compat::Tokio02AsyncWriteCompatExt;
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut config = Config::new();
+///
+/// config.host("0.0.0.0");
+/// config.port(1433);
+/// config.authentication(AuthMethod::sql_server("SA", "<Mys3cureP4ssW0rD>"));
+///
+/// let tcp = tokio::net::TcpStream::connect(config.get_addr()).await?;
+/// tcp.set_nodelay(true)?;
+/// // Client is ready to use.
+/// let client = tiberius::Client::connect(config, tcp.compat_write()).await?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// [`Config`]: struct.Config.html
+#[derive(Debug)]
+pub struct Client<S: AsyncRead + AsyncWrite + Unpin + Send> {
+    connection: Connection<S>,
+    transaction_state: TransactionState,
+}
+
+impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
+    /// Uses an instance of [`Config`] to specify the connection
+    /// options required to connect to the database using an established
+    /// tcp connection
+    ///
+    /// [`Config`]: struct.Config.html
+    pub async fn connect(config: Config, tcp_stream: S) -> crate::Result<Client<S>> {
+        Ok(Client {
+            connection: Connection::connect(config, tcp_stream).await?,
+            transaction_state: TransactionState::None,
+        })
+    }
+
+    /// Start a transaction
+    /// TODO: more docs
+    pub async fn begin_transaction<'conn>(&'conn mut self) -> crate::Result<Transaction<'conn, S>> {
+        // rollback current transaction if started
+        self.rollback().await?;
+
+        // start the transcation
+        self.simple_query("begin transaction").await?;
+        // if the transaction was sucessfully started, set transaction state to InProgress
+        self.transaction_state = TransactionState::InProgress;
+
+        Ok(Transaction { client: self })
+    }
+
+    async fn commit(&mut self) -> crate::Result<()> {
+        // if the transaction state is in progress,
+        if let TransactionState::InProgress = self.transaction_state {
+            self.simple_query("commit transaction").await?;
+        }
+        self.transaction_state = TransactionState::None;
+        Ok(())
+    }
+
+    async fn rollback(&mut self) -> crate::Result<()> {
+        // if the transaction state is in progress,
+        if let TransactionState::InProgress = self.transaction_state {
+            self.simple_query("rollback transaction").await?;
+        }
+        self.transaction_state = TransactionState::None;
+        Ok(())
+    }
+
+    /// Executes SQL statements in the SQL Server, returning the number rows
+    /// affected. Useful for `INSERT`, `UPDATE` and `DELETE` statements. The
+    /// `query` can define the parameter placement by annotating them with
+    /// `@PN`, where N is the index of the parameter, starting from `1`. If
+    /// executing multiple queries at a time, delimit them with `;` and refer to
+    /// [`ExecuteResult`] how to get results for the separate queries.
+    ///
+    /// For mapping of Rust types when writing, see the documentation for
+    /// [`ToSql`]. For reading data from the database, see the documentation for
+    /// [`FromSql`].
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use tiberius::Config;
+    /// # use tokio_util::compat::Tokio02AsyncWriteCompatExt;
+    /// # use std::env;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let c_str = env::var("TIBERIUS_TEST_CONNECTION_STRING").unwrap_or(
+    /// #     "server=tcp:localhost,1433;integratedSecurity=true;TrustServerCertificate=true".to_owned(),
+    /// # );
+    /// # let config = Config::from_ado_string(&c_str)?;
+    /// # let tcp = tokio::net::TcpStream::connect(config.get_addr()).await?;
+    /// # tcp.set_nodelay(true)?;
+    /// # let mut client = tiberius::Client::connect(config, tcp.compat_write()).await?;
+    /// let results = client
+    ///     .execute(
+    ///         "INSERT INTO ##Test (id) VALUES (@P1), (@P2), (@P3)",
+    ///         &[&1i32, &2i32, &3i32],
+    ///     )
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// [`ExecuteResult`]: struct.ExecuteResult.html
+    /// [`ToSql`]: trait.ToSql.html
+    /// [`FromSql`]: trait.FromSql.html
+    pub async fn execute<'a>(
+        &mut self,
+        query: impl Into<Cow<'a, str>>,
+        params: &[&dyn ToSql],
+    ) -> crate::Result<ExecuteResult> {
+        // rollback if a transaction is in progress
+        self.rollback().await?;
+        self.execute_internal(query, params).await
+    }
+
+    async fn execute_internal<'a>(
         &mut self,
         query: impl Into<Cow<'a, str>>,
         params: &[&dyn ToSql],
@@ -157,6 +324,19 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
     /// [`ToSql`]: trait.ToSql.html
     /// [`FromSql`]: trait.FromSql.html
     pub async fn query<'a, 'b>(
+        &'a mut self,
+        query: impl Into<Cow<'b, str>>,
+        params: &'b [&'b dyn ToSql],
+    ) -> crate::Result<QueryResult<'a>>
+    where
+        'a: 'b,
+    {
+        // rollback if a transaction is in progress
+        self.rollback().await?;
+        self.query_internal(query, params).await
+    }
+
+    async fn query_internal<'a, 'b>(
         &'a mut self,
         query: impl Into<Cow<'b, str>>,
         params: &'b [&'b dyn ToSql],
